@@ -16,7 +16,7 @@ from pathlib import Path
 import streamlit as st
 from dotenv import load_dotenv
 
-from core import chunker, ingest, llm, user_settings
+from core import ingest, llm, rag, user_settings
 from core.source_state import SourceRegistry
 from studio import list_studios
 from studio._base import StudioContext
@@ -204,12 +204,31 @@ def render_sources_panel(notebooks: list[str]) -> str | None:
     )
     if uploaded:
         registry = get_registry()
+        settings = get_settings()
+        to_index: list[tuple[str, Path]] = []
         for f in uploaded:
             sid = slugify(Path(f.name).stem)
             if sid in registry.sources:
                 continue
             saved = save_uploaded(notebook, f)
             registry.add(sid, f.name, saved, active=True)
+            to_index.append((f.name, saved))
+
+        if to_index and settings.is_configured:
+            with st.status(f"인덱싱 중 ({len(to_index)}개) — 챕터당 30초~2분", expanded=True) as status:
+                for fname, path in to_index:
+                    st.write(f"⏳ {fname}")
+                    result = rag.index_source_sync(notebook, path, settings=settings)
+                    if result["ok"]:
+                        st.write(f"✓ {fname}  ({result['took_sec']:.1f}s)")
+                    else:
+                        st.write(f"⚠ {fname} 실패: {result.get('error')}")
+                status.update(label="인덱싱 완료", state="complete")
+        elif to_index:
+            st.warning(
+                "⚙ API 설정이 비어 있어 인덱싱이 보류됐습니다. "
+                "URL/키 입력 후 [등록된 소스] 옆 ⟳ 버튼으로 다시 시도하세요."
+            )
         st.success(f"{len(uploaded)}개 등록")
 
     st.markdown("**등록된 소스**")
@@ -264,75 +283,42 @@ def render_studio_panel(notebook: str) -> None:
 
 
 # ---------- 중앙: 채팅 + 실행 결과 ----------
-def _active_body_text(notebook: str) -> str | None:
-    """현재 활성 소스들의 본문을 합쳐서 반환 (인제스트 결과 캐시)."""
-    registry = get_registry()
-    active = registry.active_sources()
-    if not active:
-        return None
-    cache_key = f"body::{notebook}::" + "|".join(sorted(e.source_id for e in active))
-    cached = st.session_state.get(cache_key)
-    if cached:
-        return cached
-    docs = []
-    for e in active:
-        try:
-            docs.append(ingest.ingest_any(e.path, source_id=e.source_id))
-        except Exception:  # noqa: BLE001
-            continue
-    body = ingest.merge_docs(docs)
-    st.session_state[cache_key] = body
-    return body
-
-
 def render_chat_panel(notebook: str) -> None:
     registry = get_registry()
     settings = get_settings()
 
     st.markdown(f"### 💬 채팅 — `{notebook}`  {registry.header_label()}")
 
-    # 채팅 히스토리 (노트북별로 보관)
+    # 채팅 히스토리 (노트북별)
     hist_key = f"chat_history::{notebook}"
     history = st.session_state.setdefault(hist_key, [])
 
-    # 기존 대화 출력
     for msg in history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
-    # 입력 활성화 조건: API 준비 + 활성 소스 1개 이상
     api_ready = settings.is_configured
-    has_sources = registry.has_any_active
+    has_index = rag.has_index(notebook)
 
     placeholder = (
         "질문을 입력하세요 (예: 은퇴 준비기와 후기 고령기의 핵심 차이를 표로 정리해줘)"
-        if (api_ready and has_sources)
+        if (api_ready and has_index)
         else (
             "⚙ 설정에서 API URL/키를 먼저 입력하세요" if not api_ready
-            else "우측에서 소스를 1개 이상 체크하세요"
+            else "소스를 업로드하고 인덱싱이 끝나야 채팅이 가능합니다"
         )
     )
 
-    prompt = st.chat_input(placeholder, disabled=not (api_ready and has_sources))
+    prompt = st.chat_input(placeholder, disabled=not (api_ready and has_index))
     if prompt:
         history.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        body = _active_body_text(notebook) or ""
-        body = chunker.fit_to_budget(body, budget_chars=50000)
-        system = (
-            "당신은 한국어 교재 본문에 대한 질문에 답하는 도우미다. "
-            "아래 본문 안의 정보를 우선 근거로 삼고, 없으면 '본문에 명시되지 않음'이라고 답하라.\n\n"
-            f"=== 본문 ===\n{body}\n=== 본문 끝 ===\n"
-        )
-
         with st.chat_message("assistant"):
-            with st.spinner("답변 생성 중…"):
+            with st.spinner("검색 + 답변 생성 중…"):
                 try:
-                    response = llm.call(system, prompt, settings=settings)
-                except llm.LLMConfigError as ex:
-                    response = f"⚙ {ex}"
+                    response = rag.query_sync(notebook, prompt, settings=settings)
                 except Exception as ex:  # noqa: BLE001
                     response = f"오류: {type(ex).__name__} — {ex}"
             st.markdown(response)

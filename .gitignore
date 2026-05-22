@@ -19,6 +19,11 @@ data/notebooks/*/
 !data/notebooks/.gitkeep
 data/user_settings.json
 
+# RAG-Anything 인덱스 (노트북별 vector + graph 저장소)
+data/notebooks/*/rag_storage/
+# 로컬 임베딩 모델 캐시 (HuggingFace)
+.cache/huggingface/
+
 # Sample/business reference materials (not for public distribution)
 _assets/*.pdf
 _assets/*.hwp
