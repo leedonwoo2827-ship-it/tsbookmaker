@@ -17,6 +17,7 @@ venv/
 # Data
 data/notebooks/*/
 !data/notebooks/.gitkeep
+data/user_settings.json
 
 # Sample/business reference materials (not for public distribution)
 _assets/*.pdf

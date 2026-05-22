@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # TSBookMaker 실행 스크립트 (macOS / Linux)
+# Streamlit UI 한 프로세스만 기동. API URL/Key 는 화면 좌측 ⚙ 설정에서 입력.
 set -e
 
 if [ ! -f ".venv/bin/activate" ]; then
@@ -10,7 +11,6 @@ fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
-# .env 로드
 if [ -f ".env" ]; then
     set -a
     # shellcheck disable=SC1091
@@ -19,15 +19,7 @@ if [ -f ".env" ]; then
 fi
 
 : "${TSB_UI_PORT:=8610}"
-: "${TSB_LITELLM_PORT:=4610}"
-
-echo "[TSBookMaker] LiteLLM proxy 기동중 (port ${TSB_LITELLM_PORT})..."
-litellm --config litellm_config.yaml --port "${TSB_LITELLM_PORT}" >/tmp/tsbm-litellm.log 2>&1 &
-LITELLM_PID=$!
-trap "kill ${LITELLM_PID} 2>/dev/null || true" EXIT
-
-sleep 3
 
 echo "[TSBookMaker] Streamlit UI 기동중 (port ${TSB_UI_PORT})..."
 echo "[TSBookMaker] 브라우저: http://localhost:${TSB_UI_PORT}"
-streamlit run app.py --server.port "${TSB_UI_PORT}" --server.headless true
+streamlit run app.py --server.port "${TSB_UI_PORT}" --server.headless false

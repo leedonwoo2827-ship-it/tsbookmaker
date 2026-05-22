@@ -1,78 +1,45 @@
-"""LLM 라우터 — LiteLLM 프록시 경유, DeepSeek V4 디폴트.
+"""LLM 호출 — 사용자가 화면에서 입력한 URL/Key/Model 로 OpenAI-compatible API 직접 호출.
 
-UI 드롭다운에서 모델을 변경하면 `call(model=...)` 인자로 즉시 라우팅 키가 바뀐다.
-LiteLLM 프록시(`litellm_config.yaml`)에 deepseek-v4 / claude-opus-4-7 / gpt-4o
-세 키가 등록되어 있다.
+회사 LLM 게이트웨이는 대부분 OpenAI 호환 `/v1/chat/completions` 엔드포인트를 제공한다.
+DeepSeek, OpenAI, 그리고 대부분의 회사 LLM 프록시가 동일 포맷을 따른다.
 """
 from __future__ import annotations
 
 import json
-import os
-from dataclasses import dataclass
-from typing import Any
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
-
-DEFAULT_PROVIDER_MODEL = {
-    "deepseek": "deepseek-v4",
-    "claude": "claude-opus-4-7",
-    "openai": "gpt-4o",
-}
+from core import user_settings
 
 
-@dataclass
-class LLMConfig:
-    proxy_url: str
-    master_key: str
-    model: str
-    temperature: float = 0.3
-    max_tokens: int = 8000
-    timeout: float = 180.0
-
-    @classmethod
-    def from_env(cls, model: str | None = None) -> "LLMConfig":
-        port = os.getenv("TSB_LITELLM_PORT", "4610")
-        provider = os.getenv("TSB_LLM_PROVIDER", "deepseek").lower()
-        env_key = f"TSB_LLM_MODEL_{provider.upper()}"
-        default_model = os.getenv(env_key) or DEFAULT_PROVIDER_MODEL.get(provider, "deepseek-v4")
-        return cls(
-            proxy_url=os.getenv("TSB_LITELLM_URL", f"http://localhost:{port}"),
-            master_key=os.getenv("LITELLM_MASTER_KEY", "sk-litellm-master-tsbm"),
-            model=model or default_model,
-            temperature=float(os.getenv("TSB_LLM_TEMPERATURE", "0.3")),
-            max_tokens=int(os.getenv("TSB_LLM_MAX_TOKENS", "8000")),
-        )
+class LLMConfigError(RuntimeError):
+    """API 키/URL 미설정 등 설정 오류."""
 
 
-def resolve_model_key(provider_or_model: str) -> str:
-    """UI 드롭다운에서 받은 'deepseek' / 'claude' / 'openai' 별칭을 실제 모델 키로 변환.
-    이미 모델 키('deepseek-v4' 등)면 그대로 반환."""
-    key = (provider_or_model or "").strip().lower()
-    if key in DEFAULT_PROVIDER_MODEL:
-        env_key = f"TSB_LLM_MODEL_{key.upper()}"
-        return os.getenv(env_key) or DEFAULT_PROVIDER_MODEL[key]
-    return provider_or_model
+def _normalize_base(api_base: str) -> str:
+    base = (api_base or "").rstrip("/")
+    if not base:
+        return ""
+    # 흔한 실수: 사용자가 /v1 까지 안 붙이고 들어옴 → 자동 보정
+    if not base.endswith("/v1"):
+        # 단, 이미 /chat/completions 까지 적었으면 그대로 둠
+        if "/chat/completions" not in base:
+            base = base + "/v1"
+    return base
+
+
+def _endpoint(api_base: str) -> str:
+    base = _normalize_base(api_base)
+    if base.endswith("/chat/completions"):
+        return base
+    return f"{base}/chat/completions"
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=2, max=20), reraise=True)
-def _post_chat(cfg: LLMConfig, messages: list[dict[str, Any]], response_format: dict | None = None) -> dict:
-    headers = {
-        "Authorization": f"Bearer {cfg.master_key}",
-        "Content-Type": "application/json",
-    }
-    payload: dict[str, Any] = {
-        "model": cfg.model,
-        "messages": messages,
-        "temperature": cfg.temperature,
-        "max_tokens": cfg.max_tokens,
-    }
-    if response_format:
-        payload["response_format"] = response_format
-
-    with httpx.Client(timeout=cfg.timeout) as client:
-        r = client.post(f"{cfg.proxy_url}/v1/chat/completions", headers=headers, json=payload)
+def _post(url: str, headers: dict, payload: dict, timeout: float) -> dict:
+    with httpx.Client(timeout=timeout) as client:
+        r = client.post(url, headers=headers, json=payload)
         r.raise_for_status()
         return r.json()
 
@@ -83,40 +50,78 @@ def call(
     *,
     model: str | None = None,
     json_mode: bool = False,
+    settings: user_settings.UserSettings | None = None,
 ) -> str:
-    """단일 user 메시지 호출. json_mode=True 면 응답을 JSON 으로 강제."""
-    cfg = LLMConfig.from_env(model=resolve_model_key(model) if model else None)
-    response_format = {"type": "json_object"} if json_mode else None
-    data = _post_chat(
-        cfg,
-        messages=[
+    s = settings or user_settings.load()
+    if not s.is_configured:
+        raise LLMConfigError(
+            "API 설정이 비어 있습니다. 우측 상단 ⚙ 설정에서 API URL과 키를 입력해 주세요."
+        )
+
+    headers = {
+        "Authorization": f"Bearer {s.api_key}",
+        "Content-Type": "application/json",
+    }
+    payload: dict = {
+        "model": model or s.model,
+        "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        response_format=response_format,
-    )
+        "temperature": s.temperature,
+        "max_tokens": s.max_tokens,
+    }
+    if json_mode:
+        payload["response_format"] = {"type": "json_object"}
+
+    data = _post(_endpoint(s.api_base), headers, payload, timeout=180.0)
     return data["choices"][0]["message"]["content"]
 
 
-def call_json(system: str, user: str, *, model: str | None = None) -> dict:
-    """JSON 응답을 dict 로 파싱해서 반환. 파싱 실패 시 한 번 더 재시도."""
-    raw = call(system, user, model=model, json_mode=True)
+def call_json(
+    system: str,
+    user: str,
+    *,
+    model: str | None = None,
+    settings: user_settings.UserSettings | None = None,
+) -> dict:
+    raw = call(system, user, model=model, json_mode=True, settings=settings)
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
+        # JSON 파싱 실패 → 1회 자동 복구
         repaired = call(
-            "You are a JSON repair tool. Return ONLY valid JSON.",
+            "You are a JSON repair tool. Return ONLY a valid JSON object.",
             f"Repair this into valid JSON and return only the JSON object:\n{raw}",
             model=model,
             json_mode=True,
+            settings=settings,
         )
         return json.loads(repaired)
 
 
-def list_available_models() -> list[str]:
-    """UI 드롭다운용 — env 에 등록된 모델 키 리스트."""
-    keys: list[str] = []
-    for provider, fallback in DEFAULT_PROVIDER_MODEL.items():
-        env_key = f"TSB_LLM_MODEL_{provider.upper()}"
-        keys.append(os.getenv(env_key) or fallback)
-    return keys
+def list_available_models(settings: user_settings.UserSettings | None = None) -> list[str]:
+    """UI 드롭다운용 — 기본 모델 + 사용자가 추가한 보조 모델."""
+    s = settings or user_settings.load()
+    models = [s.model] if s.model else []
+    for m in s.alt_models or []:
+        if m and m not in models:
+            models.append(m)
+    return models or ["deepseek-v4"]
+
+
+def test_connection(settings: user_settings.UserSettings) -> tuple[bool, str]:
+    """설정 패널의 '연결 테스트' 버튼 — 짧은 핑 호출."""
+    if not settings.is_configured:
+        return False, "API URL 또는 키가 비어 있습니다."
+    try:
+        out = call(
+            "You are a connection test.",
+            "Reply with exactly: pong",
+            settings=settings,
+        )
+        return True, f"OK — 응답: {out.strip()[:80]}"
+    except httpx.HTTPStatusError as e:
+        return False, f"HTTP {e.response.status_code} — {e.response.text[:200]}"
+    except Exception as e:  # noqa: BLE001
+        return False, f"오류: {type(e).__name__} — {e}"
