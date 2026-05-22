@@ -145,36 +145,31 @@ def render_settings_panel() -> None:
                         st.error(f"연결 실패 — {msg}")
 
 
-# ---------- 사이드바: 출처 (소스 패널) ----------
+# ---------- 우측(narrow): 출처 패널 ----------
 def render_sources_panel(notebooks: list[str]) -> str | None:
-    st.subheader("📚 출처")
+    st.markdown("### 📚 출처")
 
-    st.markdown("**노트북**")
     options = ["(새로 만들기)"] + notebooks
-    selected = st.selectbox("노트북 선택", options=options, label_visibility="collapsed")
+    selected = st.selectbox(
+        "노트북",
+        options=options,
+        label_visibility="visible",
+    )
 
     notebook: str | None = None
     if selected == "(새로 만들기)":
-        new_name = st.text_input("새 노트북 이름", placeholder="예: my-textbook-vol1")
-        if st.button("➕ 노트북 생성", use_container_width=True):
+        new_name = st.text_input("새 노트북 이름", placeholder="예: my-vol1")
+        if st.button("➕ 생성", use_container_width=True):
             if new_name.strip():
                 (DATA_DIR / slugify(new_name)).mkdir(parents=True, exist_ok=True)
                 st.rerun()
-    else:
-        notebook = selected
-
-    st.divider()
-
-    if not notebook:
-        st.info("먼저 노트북을 선택하거나 생성하세요.")
         return None
+    notebook = selected
 
-    st.markdown("**＋ 소스 추가**")
     uploaded = st.file_uploader(
-        "Upload",
-        type=["pdf", "txt", "md"],
+        "＋ 소스 추가",
+        type=["pdf", "txt", "md", "hwpx"],
         accept_multiple_files=True,
-        label_visibility="collapsed",
     )
     if uploaded:
         registry = get_registry()
@@ -184,10 +179,7 @@ def render_sources_panel(notebooks: list[str]) -> str | None:
                 continue
             saved = save_uploaded(notebook, f)
             registry.add(sid, f.name, saved, active=True)
-        st.success(f"{len(uploaded)}개 소스 등록")
-
-    st.caption("200MB per file · PDF, TXT, MD")
-    st.divider()
+        st.success(f"{len(uploaded)}개 등록")
 
     st.markdown("**등록된 소스**")
     registry = get_registry()
@@ -195,31 +187,54 @@ def render_sources_panel(notebooks: list[str]) -> str | None:
         st.caption("(없음)")
     else:
         for sid, entry in list(registry.sources.items()):
-            cols = st.columns([1, 10])
-            with cols[0]:
-                new_state = st.checkbox(
-                    "활성",
-                    value=entry.active,
-                    key=f"chk_{sid}",
-                    label_visibility="collapsed",
-                )
-                if new_state != entry.active:
-                    registry.set_active(sid, new_state)
-                    st.rerun()
-            with cols[1]:
-                st.write(entry.filename)
+            new_state = st.checkbox(
+                entry.filename,
+                value=entry.active,
+                key=f"chk_{sid}",
+            )
+            if new_state != entry.active:
+                registry.set_active(sid, new_state)
+                st.rerun()
 
-        if st.button("등록 소스 모두 제거", use_container_width=True):
+        if st.button("모두 제거", use_container_width=True):
             reset_registry()
             st.rerun()
 
     return notebook
 
 
-# ---------- 중앙: 채팅 + 스튜디오 ----------
-def render_chat_and_studio(notebook: str) -> None:
+# ---------- 좌측: 스튜디오 패널 ----------
+def render_studio_panel(notebook: str) -> None:
     registry = get_registry()
     settings = get_settings()
+
+    st.markdown("### 🧰 Studio")
+
+    api_ready = settings.is_configured
+    disabled_reason = registry.studio_disabled_reason()
+    if not api_ready:
+        st.warning("⚙ 좌측 사이드바에서 API URL/키를 먼저 입력하세요.")
+    elif disabled_reason:
+        st.warning(disabled_reason)
+
+    studio_disabled = (disabled_reason is not None) or (not api_ready)
+
+    # 세로 배치 — 좁은 좌측 컬럼에 1열로 5버튼
+    for studio in list_studios():
+        btn_label = f"{studio.icon}  {studio.label}"
+        if st.button(
+            btn_label,
+            key=f"btn_{studio.key}",
+            use_container_width=True,
+            disabled=studio_disabled,
+        ):
+            st.session_state["pending_studio"] = studio.key
+            st.rerun()
+
+
+# ---------- 중앙: 채팅 + 실행 결과 ----------
+def render_chat_panel(notebook: str) -> None:
+    registry = get_registry()
 
     st.markdown(f"### 💬 채팅 — `{notebook}`  {registry.header_label()}")
 
@@ -230,43 +245,28 @@ def render_chat_and_studio(notebook: str) -> None:
         disabled=True,
     )
 
-    st.divider()
+    # 스튜디오 실행 결과 자리 — 좌측 버튼이 눌리면 여기에 결과 표시
+    pending = st.session_state.pop("pending_studio", None)
+    if pending:
+        from studio import get_studio
+        _run_studio(notebook, get_studio(pending))
 
-    # 모델 드롭다운 — 설정에서 등록된 모델 목록
-    available_models = llm.list_available_models(settings)
-    model = st.selectbox(
-        "🛠 사용할 모델",
-        options=available_models,
-        index=0,
-        help="좌측 ⚙ 설정에서 등록한 모델들. 기본 + 보조 모델.",
-    )
-
-    # 스튜디오 패널
-    st.markdown("### 🧰 Studio")
-    api_ready = settings.is_configured
-    disabled_reason = registry.studio_disabled_reason()
-    if not api_ready:
-        st.warning("⚙ 좌측 설정 패널에서 API URL과 키를 먼저 입력하세요.")
-    elif disabled_reason:
-        st.warning(disabled_reason)
-
-    studio_disabled = (disabled_reason is not None) or (not api_ready)
-
-    cols = st.columns(2)
-    for i, studio in enumerate(list_studios()):
-        with cols[i % 2]:
-            btn_label = f"{studio.icon}  {studio.label}"
-            if st.button(
-                btn_label,
-                key=f"btn_{studio.key}",
-                use_container_width=True,
-                disabled=studio_disabled,
-            ):
-                _run_studio(notebook, model, studio)
+    # 직전 실행 산출물(있다면) 다시 보여주기 위해 session_state 에 보관
+    last = st.session_state.get("last_result")
+    if last and not pending:
+        st.divider()
+        st.caption(f"최근 실행: {last['studio']} — {last['summary']}")
+        for p_str in last["paths"]:
+            p = Path(p_str)
+            st.write(f"📄 `{p.name}`")
+            if p.suffix == ".md" and p.exists():
+                with st.expander(f"미리보기 — {p.name}"):
+                    st.markdown(p.read_text(encoding="utf-8"))
 
 
-def _run_studio(notebook: str, model: str, studio) -> None:
+def _run_studio(notebook: str, studio) -> None:
     registry = get_registry()
+    settings = get_settings()
     active_entries = registry.active_sources()
     if not active_entries:
         st.error("활성 소스가 없습니다.")
@@ -279,6 +279,7 @@ def _run_studio(notebook: str, model: str, studio) -> None:
             try:
                 docs.append(ingest.ingest_any(e.path, source_id=e.source_id))
             except Exception as ex:  # noqa: BLE001
+                status.update(label=f"{studio.label} 실패 — 인제스트 오류", state="error")
                 st.error(f"인제스트 실패 — {e.filename}: {ex}")
                 return
         body_text = ingest.merge_docs(docs)
@@ -293,10 +294,10 @@ def _run_studio(notebook: str, model: str, studio) -> None:
             output_dir=output_dir,
             notebook_id=notebook,
             chapter_hint=chapter_hint,
-            model=model,
+            model=None,  # 설정의 디폴트 모델 사용
         )
 
-        st.write(f"LLM 호출 (model={model})…")
+        st.write(f"LLM 호출 (model={settings.model})…")
         try:
             result = studio.run(ctx)
         except llm.LLMConfigError as ex:
@@ -310,6 +311,11 @@ def _run_studio(notebook: str, model: str, studio) -> None:
 
         status.update(label=f"{studio.label} 완료", state="complete")
         st.success(result.summary)
+        st.session_state["last_result"] = {
+            "studio": studio.label,
+            "summary": result.summary,
+            "paths": [str(p) for p in result.all_paths()],
+        }
         for p in result.all_paths():
             try:
                 rel = p.relative_to(DATA_DIR.parent)
@@ -327,14 +333,25 @@ def main() -> None:
     render_settings_panel()
 
     notebooks = list_notebooks()
-    left, right = st.columns([1, 2], gap="large")
-    with left:
+
+    # 3-column: 스튜디오(좌, 좁음) · 채팅(중, 넓음) · 출처(우, narrow)
+    studio_col, chat_col, source_col = st.columns([1.3, 2.6, 1.2], gap="medium")
+
+    with source_col:
         notebook = render_sources_panel(notebooks)
-    with right:
+
+    with studio_col:
         if notebook:
-            render_chat_and_studio(notebook)
+            render_studio_panel(notebook)
         else:
-            st.info("좌측 패널에서 노트북을 선택하거나 생성하세요.")
+            st.markdown("### 🧰 Studio")
+            st.caption("우측에서 노트북을 선택하세요.")
+
+    with chat_col:
+        if notebook:
+            render_chat_panel(notebook)
+        else:
+            st.info("우측 출처 패널에서 노트북을 선택하거나 생성하세요.")
 
 
 if __name__ == "__main__":
