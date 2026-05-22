@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Env / secrets
+.env
+.env.*.local
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Data
+data/notebooks/*/
+!data/notebooks/.gitkeep
+
+# Sample/business reference materials (not for public distribution)
+_assets/*.pdf
+_assets/*.hwp
+_assets/*.hwpx
+_assets/*.docx
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# Logs
+*.log
+logs/
