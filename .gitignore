@@ -24,6 +24,9 @@ _assets/*.pdf
 _assets/*.hwp
 _assets/*.hwpx
 _assets/*.docx
+_assets/*.zip
+_assets/_migration_kit/
+_assets/Ubion_*/
 
 # OS
 .DS_Store

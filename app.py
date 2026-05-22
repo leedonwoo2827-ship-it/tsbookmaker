@@ -87,27 +87,32 @@ def render_settings_panel() -> None:
             api_base = st.text_input(
                 "API 엔드포인트 URL",
                 value=s.api_base,
-                placeholder="예: https://llm.mycompany.com/v1",
-                help="회사 LLM 게이트웨이 주소. /v1 은 자동으로 붙여드립니다. 공식 DeepSeek 사용 시: https://api.deepseek.com",
+                placeholder="예: http://192.168.50.119:4000",
+                help="사내 LiteLLM 게이트웨이 주소. /v1 은 자동으로 붙여드립니다.",
             )
             api_key = st.text_input(
-                "API 키 (회사 발급)",
+                "API 키 (virtual key)",
                 value=s.api_key,
                 type="password",
                 placeholder="sk-...",
-                help="키는 화면에 표시되지 않으며 data/user_settings.json 에 저장됩니다.",
+                help="사내 LiteLLM 대시보드(/ui/)에서 발급받은 virtual key. data/user_settings.json 에 저장됩니다.",
             )
             model = st.text_input(
                 "모델 이름",
-                value=s.model or "deepseek-v4",
-                placeholder="deepseek-v4",
-                help="회사 게이트웨이가 사용하는 모델 식별자. 모르면 담당자에게 문의하세요.",
+                value=s.model or "deepseek-v4-flash",
+                placeholder="deepseek-v4-flash",
+                help=(
+                    "사내 LiteLLM 카탈로그 — 자주 쓰는 텍스트 모델: "
+                    "deepseek-v4-flash (가성비) / deepseek-v4-pro (품질) / "
+                    "claude-haiku-4-5 / claude-sonnet-4-6 / claude-opus-4-7 / "
+                    "gpt-5.4-mini / gpt-5.5"
+                ),
             )
             alt_models_str = st.text_input(
                 "보조 모델 (선택, 콤마 구분)",
                 value=", ".join(s.alt_models or []),
-                placeholder="claude-opus-4-7, gpt-4o",
-                help="여러 모델을 등록하면 작업 화면 상단 드롭다운에서 전환할 수 있습니다.",
+                placeholder="claude-opus-4-7, gpt-5.5",
+                help="향후 모델 전환 옵션. 카탈로그 이름 그대로 입력.",
             )
             col_a, col_b = st.columns(2)
             with col_a:

@@ -22,6 +22,26 @@ class LLMConfigError(RuntimeError):
     """API 키/URL 미설정 등 설정 오류."""
 
 
+# Ubion LiteLLM 마이그레이션 키트 함정 #1:
+# 신 OpenAI 모델군은 `max_tokens` 를 안 받고 `max_completion_tokens` 만 받는다.
+# 다른 모델(Claude / DeepSeek / Gemini 등)은 `max_tokens` 그대로 사용 가능.
+_NEW_OPENAI_MODELS = {
+    "gpt-5.5",
+    "gpt-5.5-pro",
+    "chat-latest",
+    "gpt-5.4-mini",
+    "gpt-5.4-nano",
+}
+
+
+def _apply_max_tokens(payload: dict, model: str, max_tokens: int) -> None:
+    """모델 종류에 따라 max_tokens / max_completion_tokens 자동 선택."""
+    if model in _NEW_OPENAI_MODELS:
+        payload["max_completion_tokens"] = max_tokens
+    else:
+        payload["max_tokens"] = max_tokens
+
+
 def _normalize_base(api_base: str) -> str:
     base = (api_base or "").rstrip("/")
     if not base:
@@ -90,15 +110,16 @@ def call(
         "Authorization": f"Bearer {s.api_key}",
         "Content-Type": "application/json",
     }
+    chosen_model = model or s.model
     payload: dict = {
-        "model": model or s.model,
+        "model": chosen_model,
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
         "temperature": s.temperature,
-        "max_tokens": s.max_tokens,
     }
+    _apply_max_tokens(payload, chosen_model, s.max_tokens)
 
     data = _post(_endpoint(s.api_base), headers, payload, timeout=180.0)
     return data["choices"][0]["message"]["content"]

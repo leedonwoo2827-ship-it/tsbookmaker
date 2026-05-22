@@ -15,9 +15,9 @@ SETTINGS_FILE = Path(__file__).resolve().parent.parent / "data" / "user_settings
 
 @dataclass
 class UserSettings:
-    api_base: str = ""              # 예: https://llm.mycompany.com/v1
-    api_key: str = ""               # 회사 발급 API 키
-    model: str = "deepseek-v4"      # 기본 모델 이름 (회사 게이트웨이가 다른 이름이면 변경)
+    api_base: str = ""                    # 예: http://192.168.50.119:4000 (회사 LiteLLM)
+    api_key: str = ""                     # 회사 발급 virtual key (sk-...)
+    model: str = "deepseek-v4-flash"      # 기본 모델 (Ubion LiteLLM 카탈로그 기준)
     temperature: float = 0.3
     max_tokens: int = 8000
 
@@ -51,11 +51,20 @@ def load() -> UserSettings:
         except (json.JSONDecodeError, TypeError):
             pass
 
-    # 파일 없거나 파싱 실패 → .env 디폴트로 fallback
+    # 파일 없거나 파싱 실패 → 환경변수 fallback
+    # Ubion LiteLLM 키트의 UBION_LITELLM_URL/KEY 도 자동 인식
     return UserSettings(
-        api_base=os.getenv("DEEPSEEK_API_BASE", "") or os.getenv("OPENAI_API_BASE", ""),
-        api_key=os.getenv("DEEPSEEK_API_KEY", "") or os.getenv("OPENAI_API_KEY", ""),
-        model=os.getenv("TSB_LLM_MODEL_DEEPSEEK", "deepseek-v4"),
+        api_base=(
+            os.getenv("UBION_LITELLM_URL", "")
+            or os.getenv("DEEPSEEK_API_BASE", "")
+            or os.getenv("OPENAI_API_BASE", "")
+        ),
+        api_key=(
+            os.getenv("UBION_LITELLM_KEY", "")
+            or os.getenv("DEEPSEEK_API_KEY", "")
+            or os.getenv("OPENAI_API_KEY", "")
+        ),
+        model=os.getenv("TSB_LLM_MODEL_DEEPSEEK", "deepseek-v4-flash"),
         temperature=float(os.getenv("TSB_LLM_TEMPERATURE", "0.3")),
         max_tokens=int(os.getenv("TSB_LLM_MAX_TOKENS", "8000")),
     )
