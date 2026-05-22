@@ -165,13 +165,9 @@ def call_json(
 
 
 def list_available_models(settings: user_settings.UserSettings | None = None) -> list[str]:
-    """UI 드롭다운용 — 기본 모델 + 사용자가 추가한 보조 모델."""
+    """현재 적용된 모델 1개를 리스트로 반환 (호환성 유지용)."""
     s = settings or user_settings.load()
-    models = [s.model] if s.model else []
-    for m in s.alt_models or []:
-        if m and m not in models:
-            models.append(m)
-    return models or ["deepseek-v4"]
+    return [s.model] if s.model else ["deepseek-v4-flash"]
 
 
 def test_connection(settings: user_settings.UserSettings) -> tuple[bool, str]:

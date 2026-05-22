@@ -76,78 +76,104 @@ def save_uploaded(notebook: str, uploaded_file) -> Path:
 # ---------- ⚙ 설정 패널 ----------
 def render_settings_panel() -> None:
     s = get_settings()
+    show_presets = os.getenv("TSB_SHOW_PRESETS", "1") != "0"
+
     with st.sidebar:
         st.markdown("## ⚙ API 설정")
         if s.is_configured:
-            st.success(f"연결 준비 완료\n\n- URL: `{s.api_base}`\n- Key: `{s.safe_api_key_preview()}`\n- Model: `{s.model}`")
+            st.success(
+                "연결 준비 완료\n\n"
+                f"- URL: `{s.api_base}`\n"
+                f"- Key: `{s.safe_api_key_preview()}`\n"
+                f"- 모델: {s.preset_label()}"
+            )
         else:
-            st.error("API URL과 키를 입력해야 스튜디오가 동작합니다.")
+            st.error("URL과 API 키를 입력하세요.")
 
-        with st.form("settings_form", clear_on_submit=False):
-            api_base = st.text_input(
-                "API 엔드포인트 URL",
-                value=s.api_base,
-                placeholder="예: http://192.168.50.119:4000",
-                help="사내 LiteLLM 게이트웨이 주소. /v1 은 자동으로 붙여드립니다.",
-            )
-            api_key = st.text_input(
-                "API 키 (virtual key)",
-                value=s.api_key,
-                type="password",
-                placeholder="sk-...",
-                help="사내 LiteLLM 대시보드(/ui/)에서 발급받은 virtual key. data/user_settings.json 에 저장됩니다.",
-            )
-            model = st.text_input(
-                "모델 이름",
-                value=s.model or "deepseek-v4-flash",
-                placeholder="deepseek-v4-flash",
-                help=(
-                    "사내 LiteLLM 카탈로그 — 자주 쓰는 텍스트 모델: "
-                    "deepseek-v4-flash (가성비) / deepseek-v4-pro (품질) / "
-                    "claude-haiku-4-5 / claude-sonnet-4-6 / claude-opus-4-7 / "
-                    "gpt-5.4-mini / gpt-5.5"
-                ),
-            )
-            alt_models_str = st.text_input(
-                "보조 모델 (선택, 콤마 구분)",
-                value=", ".join(s.alt_models or []),
-                placeholder="claude-opus-4-7, gpt-5.5",
-                help="향후 모델 전환 옵션. 카탈로그 이름 그대로 입력.",
-            )
-            col_a, col_b = st.columns(2)
-            with col_a:
-                temperature = st.number_input("Temperature", min_value=0.0, max_value=2.0, value=s.temperature, step=0.1)
-            with col_b:
-                max_tokens = st.number_input("Max Tokens", min_value=512, max_value=32000, value=s.max_tokens, step=512)
+        # URL / 키 — 단순 입력 (폼 밖, 즉시 반영)
+        api_base = st.text_input(
+            "API URL",
+            value=s.api_base,
+            placeholder="http://192.168.50.119:4000",
+            help="사내 LiteLLM 게이트웨이 주소. /v1 은 자동으로 붙습니다.",
+        )
+        api_key = st.text_input(
+            "API 키",
+            value=s.api_key,
+            type="password",
+            placeholder="sk-...",
+            help="회사에서 발급받은 키. data/user_settings.json 에만 저장됩니다.",
+        )
 
-            col_save, col_test = st.columns(2)
-            with col_save:
-                save_btn = st.form_submit_button("💾 저장", use_container_width=True)
-            with col_test:
-                test_btn = st.form_submit_button("🔌 연결 테스트", use_container_width=True)
+        # 프리셋 버튼 (TSB_SHOW_PRESETS=0 환경변수로 숨김 가능)
+        if show_presets:
+            st.markdown("**모델 프리셋**")
+            preset_keys = list(user_settings.PRESETS.keys())
+            cols = st.columns(len(preset_keys))
+            for i, key in enumerate(preset_keys):
+                preset = user_settings.PRESETS[key]
+                with cols[i]:
+                    is_current = (s.preset == key)
+                    btn = st.button(
+                        preset["label"],
+                        key=f"preset_{key}",
+                        use_container_width=True,
+                        type=("primary" if is_current else "secondary"),
+                    )
+                    if btn:
+                        new_settings = user_settings.UserSettings(
+                            api_base=api_base.strip(),
+                            api_key=api_key.strip(),
+                            preset=key,
+                            model=user_settings.preset_to_model(key),
+                            temperature=s.temperature,
+                            max_tokens=s.max_tokens,
+                        )
+                        user_settings.save(new_settings)
+                        st.session_state["settings"] = new_settings
+                        st.rerun()
+            st.caption(user_settings.PRESETS[s.preset]["desc"])
 
-            if save_btn or test_btn:
-                alt_models = [m.strip() for m in alt_models_str.split(",") if m.strip()]
+        # 고급 (접힘)
+        with st.expander("고급 설정", expanded=False):
+            temperature = st.number_input(
+                "Temperature", min_value=0.0, max_value=2.0, value=s.temperature, step=0.1
+            )
+            max_tokens = st.number_input(
+                "Max Tokens", min_value=512, max_value=32000, value=s.max_tokens, step=512
+            )
+
+        col_save, col_test = st.columns(2)
+        with col_save:
+            if st.button("💾 저장", use_container_width=True, key="settings_save"):
                 new_settings = user_settings.UserSettings(
                     api_base=api_base.strip(),
                     api_key=api_key.strip(),
-                    model=model.strip() or "deepseek-v4",
+                    preset=s.preset,
+                    model=user_settings.preset_to_model(s.preset),
                     temperature=float(temperature),
                     max_tokens=int(max_tokens),
-                    alt_models=alt_models,
                 )
                 user_settings.save(new_settings)
                 st.session_state["settings"] = new_settings
-
-                if save_btn:
-                    st.success("저장 완료")
-                if test_btn:
-                    with st.spinner("연결 테스트 중…"):
-                        ok, msg = llm.test_connection(new_settings)
-                    if ok:
-                        st.success(f"연결 OK — {msg}")
-                    else:
-                        st.error(f"연결 실패 — {msg}")
+                st.success("저장 완료")
+                st.rerun()
+        with col_test:
+            if st.button("🔌 연결 테스트", use_container_width=True, key="settings_test"):
+                test_settings = user_settings.UserSettings(
+                    api_base=api_base.strip(),
+                    api_key=api_key.strip(),
+                    preset=s.preset,
+                    model=user_settings.preset_to_model(s.preset),
+                    temperature=float(temperature),
+                    max_tokens=int(max_tokens),
+                )
+                with st.spinner("연결 테스트 중…"):
+                    ok, msg = llm.test_connection(test_settings)
+                if ok:
+                    st.success(f"연결 OK — {msg}")
+                else:
+                    st.error(f"연결 실패 — {msg}")
 
 
 # ---------- 우측(narrow): 출처 패널 ----------
